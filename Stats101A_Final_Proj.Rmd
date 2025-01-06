@@ -1,0 +1,223 @@
+---
+title: 'Stats 101A Final Project'
+output:
+  pdf_document: default
+  html_document: default
+date: "2024-07-29"
+---
+
+## Loading File
+
+```{r}
+# loading file
+performance <- read.csv("Student_Performance.csv")
+
+# removing Extracurricular.Activities column from data set
+performance <- performance[, -3]
+
+# Understand what data includes
+head(performance)
+```
+
+## About the Performance Data Set
+```{r}
+## calculating summary stats
+summary(performance)
+```
+
+```{r}
+# Stand dev of each numerical variable
+perf_numeric <- performance[, sapply(performance, is.numeric)]
+stand_dev <- sapply(perf_numeric, sd, na.rm = TRUE)
+stand_dev
+```
+
+```{r}
+cor(performance)
+```
+
+### Distribution of Variables in Performance Data Set
+
+```{r}
+# Load Libraries
+library(ggplot2)
+library(gridExtra)
+
+# Variable Distribution
+plot_Hours_Studied <- ggplot(performance, aes(x = Hours.Studied)) +
+geom_histogram(binwidth = 1, fill = "darkblue", color = "black") +
+ggtitle("Distribution of Hours Studied") +
+theme_minimal()
+plot_Previous_Scores <- ggplot(performance, aes(x = Previous.Scores)) +
+geom_histogram(binwidth = 5, fill = "darkblue", color = "black") +
+ggtitle("Distribution of Previous Scores") +
+theme_minimal()
+
+plot_Sleep_Hours <- ggplot(performance, aes(x = Sleep.Hours)) +
+geom_histogram(binwidth = 0.5, fill = "darkblue", color = "black") +
+ggtitle("Distribution of Sleep Hours") +
+theme_minimal()
+
+plot_Sample_Question_Papers_Practiced <- ggplot(performance, aes(x = Sample.Question.Papers.Practiced)) +
+geom_histogram(binwidth = 1, fill = "darkblue", color = "black") +
+ggtitle("Distribution of Sample Practice") +
+theme_minimal()
+
+plot_Performance_Index <- ggplot(performance, aes(x = Performance.Index)) +
+geom_histogram(binwidth = 5, fill = "orange", color = "black") +
+ggtitle("Distribution of Performance Index") +
+theme_minimal()
+
+# Arrange Plots
+plot_Performance_Index
+grid.arrange(plot_Hours_Studied, plot_Previous_Scores, plot_Sleep_Hours, plot_Sample_Question_Papers_Practiced, ncol = 2)
+```
+
+### Scatter Plot Matrix
+
+```{r}
+# scatter plot matrix
+pairs(performance, cex = 0.25)
+```
+
+## Original Full Model
+
+```{r}
+attach(performance)
+
+performance_model <- lm(Performance.Index ~ Hours.Studied + Previous.Scores + 
+                          Sleep.Hours + Sample.Question.Papers.Practiced)
+summary(performance_model)
+```
+
+### Diagnostic Plots for Original Model
+
+Diagnostic plots do not appear to violate any of the assumptions about the error term. 
+
+```{r}
+par(mfrow = c(2, 2))
+plot(performance_model, cex = 0.25)
+```
+
+
+## Variable Transformation: Transform X and Y simultaneously using Box-cox method
+
+The R output below rejects the null hypothesis that no transformation is needed. Hence we need to transform our variables despite the diagnostic plots showing that none of our model assumptions are violated.
+
+```{r}
+
+# adding 0.00001 to all values in Sample.Question.Papers.Practiced to avoid errors regarding 0 terms during transformations
+
+Sample.Question.Papers.Practiced <- Sample.Question.Papers.Practiced + 0.00001
+
+# loading required package: carData
+library(car)
+
+summary(transxy <- powerTransform(cbind(Performance.Index, Hours.Studied, Previous.Scores, Sleep.Hours, Sample.Question.Papers.Practiced)~1))
+```
+
+### Model After Transformation
+
+```{r}
+# transformation suggested by R
+trans_Hours.Studied <- Hours.Studied^0.93
+trans_Previous.Scores <- Previous.Scores^0.96
+trans_Sleep.Hours <- Sleep.Hours^0.83
+trans_Sample.Question.Papers.Practiced <- Sample.Question.Papers.Practiced^0.45
+
+# model after transformation
+trans_model <- lm(Performance.Index ~ trans_Hours.Studied + trans_Previous.Scores +
+                    trans_Sleep.Hours + trans_Sample.Question.Papers.Practiced)
+
+summary(trans_model)
+```
+
+### Added Variable Plots
+```{r}
+avPlots(trans_model)
+```
+
+## Variable Selection
+
+```{r}
+# insert variable selection codes & its suggested model(s) here
+install.packages("leaps")
+library(leaps)
+library(car)
+
+vif(trans_model)
+#no apparent multicollinearity
+#but a very huge R-square, try subset
+
+#Approach 1: Get all the subsets of the model
+
+X <- cbind(trans_Hours.Studied, trans_Previous.Scores, trans_Sleep.Hours, trans_Sample.Question.Papers.Practiced)
+
+b <- regsubsets(as.matrix(X), Performance.Index)
+
+summary(b)
+
+#calculate Adjusted R-square, AIC, AICc, and BIC
+
+om1 <- lm(Performance.Index ~ trans_Previous.Scores)
+om2 <- lm(Performance.Index ~ trans_Hours.Studied + trans_Previous.Scores)
+om3 <- lm(Performance.Index ~ trans_Hours.Studied + trans_Previous.Scores +
+                    trans_Sleep.Hours)
+
+calculate_metrics <- function(model, p) {
+  aic <- AIC(model)
+  bic <- BIC(model)
+  
+  # Calculate AICc
+  aicc <- aic + (2 * (p + 1) * (p + 2)) / (196 - p - 2)
+  
+  # Calculate R^2_adj
+  rsq_adj <- summary(model)$adj.r.squared
+  
+  return(c(AIC = aic, AICc = aicc, BIC = bic, R2_adj = rsq_adj))
+}
+
+good_fit_matrix <- rbind(calculate_metrics(om1, 1),
+      calculate_metrics(om2, 2),
+      calculate_metrics(om3, 3),
+      calculate_metrics(trans_model, 4))
+
+rownames(good_fit_matrix) <- "1":"4"
+
+print(good_fit_matrix)
+
+min(good_fit_matrix[,1])
+min(good_fit_matrix[,2])
+min(good_fit_matrix[,3])
+max(good_fit_matrix[,4])
+
+```
+```{r}
+#Approach 2: Stepwise Regression: Forward
+#No transformation full model
+mint <- lm(Performance.Index ~ 1, data = performance)
+forwardAIC <- step(mint, slope = list (
+  lower = ~1,
+  upper = ~trans_Hours.Studied, trans_Previous.Scores, trans_Sleep.Hours, trans_Sample.Question.Papers.Practiced),
+  direction = "forward",
+  data = performance
+)
+
+#Backward
+backAIC <- step(trans_model, direction="backward", data = performance)
+```
+
+We tried all three approaches to see if variable selection would simplify our transformed model. First, we ran an all subsets regression and calculated AIC, AICc, BIC, and Radj^2 for all possible models. The results showed that the model with all the transformed predictors included is the best, having the smallest AIC, AICc, and BIC scores, while also having the highest Radj^2.
+
+Next, we conducted stepwise regression, both backward and forward, based on AIC. The backward regression also recommended the model with all the transformed predictors, while the forward regression recommended the model with no predictors. Comparing the AIC scores, the full model with all the transformed predictors has a much smaller AIC.
+
+As a result, we can conclude that no variable selection is needed. The original model with all the transformed predictors is the best one.
+
+
+## Best Model
+Based on our result analysis, the best model is produced by transforming all our predictors (Hours Studied, Previous Scores, Sleep Hours, and Sample Question Papers Practiced) based on our response variable Performance Index.
+
+The final model after transformation is: Performance Index = B0 + B1 * (Hours Studied)^0.93 + B2 * (Previous Scores)^0.96 + B3 * (Sleep Hours)^0.83 + B4 (Sample Question Papers Practiced)
+
+### Interpretation of Model
+Our predictors seem positively correlated with our response variable, although not necessarily a strictly linear relationship. This model emphasizes how factors like how study time, previous test scores, hours of sleep, number of sample papers practiced affect students performance. Our analysis reinforces the well-known notion that factors like such improve academic performance, useful knowledge for students to keep in mind.
